@@ -917,6 +917,12 @@ def show_login_screen():
                 st.caption("🔒 Usamos apenas seu email e nome para identificação. Não acessamos nenhum outro dado da sua conta Google.")
             else:
                 st.caption("🔒 We only use your email and name for identification. We don't access any other data from your Google account.")
+            
+            # DEBUG: Mostrar informações de OAuth
+            with st.expander("🔧 DEBUG - OAuth Info"):
+                st.write("**REDIRECT_URI:**", get_google_auth_url()[:50] + "..." if get_google_auth_url() else "None")
+                st.write("**GOOGLE_CLIENT_ID:**", GOOGLE_CLIENT_ID[:20] + "..." if GOOGLE_CLIENT_ID else "NOT SET")
+                st.write("**OAuth URL válida:**", "✅ Sim" if auth_url else "❌ Não")
         
         else:
             # OAuth não configurado - mostrar erro ou modo demo para desenvolvimento
