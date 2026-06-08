@@ -709,53 +709,32 @@ def show_user_status():
 
 # ==================== AUTENTICAÇÃO GOOGLE OAUTH ====================
 
-@st.cache_resource
-def get_oauth_flow():
-    """Cria e cacheia o Flow do OAuth (evita recriação em cada rerun)"""
-    try:
-        # Usar REDIRECT_URI exatamente como está nos secrets/env
-        redirect_uri = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
-        
-        # Debug: mostrar qual URI está sendo usado
-        # st.write(f"DEBUG: Using redirect_uri = {redirect_uri}")
-        
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": GOOGLE_CLIENT_ID,
-                    "client_secret": GOOGLE_CLIENT_SECRET,
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [redirect_uri]
-                }
-            },
-            scopes=SCOPES,
-            redirect_uri=redirect_uri
-        )
-        return flow
-    except Exception as e:
-        return None
+import requests
+import uuid
 
 def get_google_auth_url():
-    """Gera a URL de autenticação do Google OAuth"""
+    """Gera a URL de autenticação do Google OAuth usando requisições diretas"""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return None
     
     try:
-        flow = get_oauth_flow()
-        if not flow:
-            return None
+        redirect_uri = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
         
-        # Gerar URL sem PKCE (mais estável no Streamlit)
-        auth_url, state = flow.authorization_url(
-            access_type='offline',
-            include_granted_scopes='true',
-            prompt='consent',
-            state=None  # Desabilita PKCE para evitar problemas de rerun
-        )
-        
-        # Salvar state para verificação
+        # Gerar um state aleatório para verificação de segurança
+        state = str(uuid.uuid4())
         st.session_state.oauth_state = state
+        
+        # Construir a URL de autenticação do Google
+        auth_url = (
+            f"https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={GOOGLE_CLIENT_ID}&"
+            f"redirect_uri={redirect_uri}&"
+            f"response_type=code&"
+            f"scope=openid%20email%20profile&"
+            f"access_type=offline&"
+            f"prompt=consent&"
+            f"state={state}"
+        )
         
         return auth_url
     except Exception as e:
@@ -767,22 +746,43 @@ def handle_oauth_callback():
     
     if "code" in query_params:
         code = query_params.get("code")
+        state = query_params.get("state")
         
         try:
-            flow = get_oauth_flow()
-            if not flow:
-                st.error("❌ OAuth não configurado corretamente")
+            # Validar state
+            if state != st.session_state.get("oauth_state"):
+                st.error("❌ State mismatch - possível ataque CSRF")
                 return False
             
+            redirect_uri = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
+            
             # Trocar código por token
-            flow.fetch_token(code=code)
-            credentials = flow.credentials
+            token_response = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code"
+                }
+            )
+            
+            if token_response.status_code != 200:
+                st.error(f"❌ Erro ao obter token: {token_response.text}")
+                return False
+            
+            token_data = token_response.json()
+            access_token = token_data.get("access_token")
+            
+            if not access_token:
+                st.error("❌ Não foi possível obter o token de acesso")
+                return False
             
             # Obter informações do usuário
-            import requests
             userinfo_response = requests.get(
-                "https://www.googleapis.com/oauth2/v3/userinfo",
-                headers={"Authorization": f"Bearer {credentials.token}"}
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"}
             )
             
             if userinfo_response.status_code == 200:
@@ -793,23 +793,20 @@ def handle_oauth_callback():
                 st.session_state.user_name = userinfo.get("name", userinfo.get("email", "Usuário"))
                 st.session_state.user_picture = userinfo.get("picture", "")
                 st.session_state.user_logged_in = True
-                st.session_state.oauth_credentials = {
-                    "token": credentials.token,
-                    "refresh_token": credentials.refresh_token,
-                    "token_uri": credentials.token_uri,
-                    "client_id": credentials.client_id,
-                    "client_secret": credentials.client_secret,
-                }
+                st.session_state.oauth_token = access_token
                 
                 # Limpar parâmetros da URL
                 st.query_params.clear()
+                st.rerun()
                 
                 return True
             else:
                 st.error(f"❌ Erro ao obter informações do usuário: {userinfo_response.status_code}")
+                return False
                 
         except Exception as e:
             st.error(f"❌ Erro na autenticação: {str(e)}")
+            return False
         finally:
             # Sempre limpar parâmetros da URL
             if "code" in st.query_params:
