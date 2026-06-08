@@ -709,16 +709,15 @@ def show_user_status():
 
 # ==================== AUTENTICAÇÃO GOOGLE OAUTH ====================
 
-def get_normalized_redirect_uri():
-    """Normaliza o REDIRECT_URI removendo trailing slash"""
-    uri = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
-    return uri.rstrip('/')
-
 @st.cache_resource
 def get_oauth_flow():
     """Cria e cacheia o Flow do OAuth (evita recriação em cada rerun)"""
     try:
-        redirect_uri = get_normalized_redirect_uri()
+        # Usar REDIRECT_URI exatamente como está nos secrets/env
+        redirect_uri = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
+        
+        # Debug: mostrar qual URI está sendo usado
+        # st.write(f"DEBUG: Using redirect_uri = {redirect_uri}")
         
         flow = Flow.from_client_config(
             {
