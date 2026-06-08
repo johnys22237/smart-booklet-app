@@ -42,7 +42,7 @@ import google.auth.transport.requests
 # ==================== CONFIGURAÇÕES DE MONETIZAÇÃO ====================
 
 # Seu email (para exceção de limites) - Configure via st.secrets ou variável de ambiente
-ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", os.environ.get("ADMIN_EMAIL", ""))
+ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", os.environ.get("ADMIN_EMAIL", "johny.jvc@gmail.com"))
 
 # Limite máximo de vídeos por apostila
 MAX_VIDEOS_PER_BOOKLET = 5
@@ -659,22 +659,28 @@ def show_payment_popup():
                         st.warning("Por favor, informe o email usado no pagamento." if lang == 'pt' else "Please enter the email used for payment.")
 
 def show_dev_toggle():
-    """Mostra toggle de modo DEV no topo da página"""
+    """Força o modo DEV ou USER automático baseado no email do usuário"""
+    # Inicializar dev_mode se não existir
     if 'dev_mode' not in st.session_state:
-        st.session_state.dev_mode = False
+        st.session_state.dev_mode = is_admin_user()
     
-    # Sidebar toggle para dev mode
+    # Se o usuário estiver logado, forçar o modo correto
+    if st.session_state.get('user_logged_in', False):
+        # Admin = DEV MODE automático
+        if is_admin_user():
+            st.session_state.dev_mode = True
+        # Usuário normal = USER MODE automático (forçado)
+        else:
+            st.session_state.dev_mode = False
+    
+    # Mostrar status do modo (apenas informativo, não permite mudar)
     with st.sidebar:
         st.divider()
-        dev_mode = st.toggle(
-            "🛠️ DEV MODE" if st.session_state.dev_mode else "👤 USER MODE",
-            value=st.session_state.dev_mode,
-            help="Modo desenvolvedor: bypassa todos os limites" if st.session_state.get('ui_language', 'pt') == 'pt' else "Developer mode: bypasses all limits"
-        )
-        st.session_state.dev_mode = dev_mode
         
-        if dev_mode:
-            st.success("🛠️ DEV MODE ATIVO" if st.session_state.get('ui_language', 'pt') == 'pt' else "🛠️ DEV MODE ACTIVE")
+        if st.session_state.get('dev_mode', False):
+            st.success("🛠️ DEV MODE (Admin)" if st.session_state.get('ui_language', 'pt') == 'pt' else "🛠️ DEV MODE (Admin)")
+        else:
+            st.info("👤 USER MODE (com limites)" if st.session_state.get('ui_language', 'pt') == 'pt' else "👤 USER MODE (with limits)")
 
 def show_user_status():
     """Mostra status do usuário na sidebar"""
@@ -703,58 +709,71 @@ def show_user_status():
 
 # ==================== AUTENTICAÇÃO GOOGLE OAUTH ====================
 
+def get_normalized_redirect_uri():
+    """Normaliza o REDIRECT_URI removendo trailing slash"""
+    uri = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
+    return uri.rstrip('/')
+
+@st.cache_resource
+def get_oauth_flow():
+    """Cria e cacheia o Flow do OAuth (evita recriação em cada rerun)"""
+    try:
+        redirect_uri = get_normalized_redirect_uri()
+        
+        flow = Flow.from_client_config(
+            {
+                "web": {
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": [redirect_uri]
+                }
+            },
+            scopes=SCOPES,
+            redirect_uri=redirect_uri
+        )
+        return flow
+    except Exception as e:
+        return None
+
 def get_google_auth_url():
     """Gera a URL de autenticação do Google OAuth"""
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return None
     
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [REDIRECT_URI]
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=REDIRECT_URI
-    )
-    
-    auth_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent'
-    )
-    
-    # Salvar state para verificação posterior
-    st.session_state.oauth_state = state
-    
-    return auth_url
+    try:
+        flow = get_oauth_flow()
+        if not flow:
+            return None
+        
+        # Gerar URL sem PKCE (mais estável no Streamlit)
+        auth_url, state = flow.authorization_url(
+            access_type='offline',
+            include_granted_scopes='true',
+            prompt='consent',
+            state=None  # Desabilita PKCE para evitar problemas de rerun
+        )
+        
+        # Salvar state para verificação
+        st.session_state.oauth_state = state
+        
+        return auth_url
+    except Exception as e:
+        return None
 
 def handle_oauth_callback():
     """Processa o callback do OAuth após login do Google"""
-    # Verificar se há código de autorização na URL
     query_params = st.query_params
     
     if "code" in query_params:
         code = query_params.get("code")
         
         try:
-            flow = Flow.from_client_config(
-                {
-                    "web": {
-                        "client_id": GOOGLE_CLIENT_ID,
-                        "client_secret": GOOGLE_CLIENT_SECRET,
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [REDIRECT_URI]
-                    }
-                },
-                scopes=SCOPES,
-                redirect_uri=REDIRECT_URI
-            )
+            flow = get_oauth_flow()
+            if not flow:
+                st.error("❌ OAuth não configurado corretamente")
+                return False
             
             # Trocar código por token
             flow.fetch_token(code=code)
@@ -787,11 +806,15 @@ def handle_oauth_callback():
                 st.query_params.clear()
                 
                 return True
-            
+            else:
+                st.error(f"❌ Erro ao obter informações do usuário: {userinfo_response.status_code}")
+                
         except Exception as e:
-            st.error(f"Erro na autenticação: {str(e)}")
-            st.query_params.clear()
-            return False
+            st.error(f"❌ Erro na autenticação: {str(e)}")
+        finally:
+            # Sempre limpar parâmetros da URL
+            if "code" in st.query_params:
+                st.query_params.clear()
     
     return False
 
