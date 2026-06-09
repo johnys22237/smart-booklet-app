@@ -24,6 +24,7 @@ from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFoun
 
 # Importações para Gemini
 import google.generativeai as genai
+from auth_providers.router import require_auth, auth_logout
 
 # Importações para PDF
 from reportlab.lib.pagesizes import letter, A4
@@ -35,9 +36,6 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.lib import colors
 
 # Importação para Google OAuth
-from google_auth_oauthlib.flow import Flow
-from google.oauth2.credentials import Credentials
-import google.auth.transport.requests
 
 # ==================== CONFIGURAÇÕES DE MONETIZAÇÃO ====================
 
@@ -58,25 +56,6 @@ MERCADO_PAGO_LINK = "https://mpago.la/2GxAskk"
 
 # Timezone de Brasília
 BRASILIA_TZ = pytz.timezone('America/Sao_Paulo')
-
-# ==================== CONFIGURAÇÕES GOOGLE OAUTH ====================
-
-# Credenciais OAuth do Google Cloud Console
-# Configure estas variáveis no Streamlit Cloud Secrets ou .streamlit/secrets.toml
-GOOGLE_CLIENT_ID = st.secrets.get("GOOGLE_CLIENT_ID", os.environ.get("GOOGLE_CLIENT_ID", ""))
-GOOGLE_CLIENT_SECRET = st.secrets.get("GOOGLE_CLIENT_SECRET", os.environ.get("GOOGLE_CLIENT_SECRET", ""))
-
-# URL de redirecionamento - ajuste para produção
-# Local: http://localhost:8501
-# Produção: https://seu-app.streamlit.app
-REDIRECT_URI = st.secrets.get("REDIRECT_URI", os.environ.get("REDIRECT_URI", "http://localhost:8501"))
-
-# Scopes necessários para autenticação
-SCOPES = [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile"
-]
 
 # ==================== CONFIGURAÇÃO DA PÁGINA ====================
 st.set_page_config(
@@ -700,236 +679,6 @@ def show_user_status():
                 st.info(f"📚 Apostilas restantes hoje: {remaining}" if lang == 'pt' else f"📚 Booklets remaining today: {remaining}")
         else:
             st.warning("⚠️ Faça login para usar o app" if lang == 'pt' else "⚠️ Please login to use the app")
-
-# ==================== AUTENTICAÇÃO GOOGLE OAUTH ====================
-
-def get_google_auth_url():
-    """Gera a URL de autenticação do Google OAuth"""
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return None
-    
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [REDIRECT_URI]
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=REDIRECT_URI
-    )
-    
-    auth_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent'
-    )
-    
-    # Salvar state para verificação posterior
-    st.session_state.oauth_state = state
-    
-    return auth_url
-
-def handle_oauth_callback():
-    """Processa o callback do OAuth após login do Google"""
-    # Verificar se há código de autorização na URL
-    query_params = st.query_params
-    
-    if "code" in query_params:
-        code = query_params.get("code")
-        
-        try:
-            flow = Flow.from_client_config(
-                {
-                    "web": {
-                        "client_id": GOOGLE_CLIENT_ID,
-                        "client_secret": GOOGLE_CLIENT_SECRET,
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [REDIRECT_URI]
-                    }
-                },
-                scopes=SCOPES,
-                redirect_uri=REDIRECT_URI
-            )
-            
-            # Trocar código por token
-            flow.fetch_token(code=code)
-            credentials = flow.credentials
-            
-            # Obter informações do usuário
-            import requests
-            userinfo_response = requests.get(
-                "https://www.googleapis.com/oauth2/v3/userinfo",
-                headers={"Authorization": f"Bearer {credentials.token}"}
-            )
-            
-            if userinfo_response.status_code == 200:
-                userinfo = userinfo_response.json()
-                
-                # Salvar dados do usuário no session_state
-                st.session_state.user_email = userinfo.get("email", "")
-                st.session_state.user_name = userinfo.get("name", userinfo.get("email", "Usuário"))
-                st.session_state.user_picture = userinfo.get("picture", "")
-                st.session_state.user_logged_in = True
-                st.session_state.oauth_credentials = {
-                    "token": credentials.token,
-                    "refresh_token": credentials.refresh_token,
-                    "token_uri": credentials.token_uri,
-                    "client_id": credentials.client_id,
-                    "client_secret": credentials.client_secret,
-                }
-                
-                # Limpar parâmetros da URL
-                st.query_params.clear()
-                
-                return True
-            
-        except Exception as e:
-            st.error(f"Erro na autenticação: {str(e)}")
-            st.query_params.clear()
-            return False
-    
-    return False
-
-def show_login_screen():
-    """Exibe tela de login com Google OAuth"""
-    lang = st.session_state.get('ui_language', 'pt')
-    
-    # Verificar callback OAuth primeiro
-    if handle_oauth_callback():
-        st.rerun()
-        return
-    
-    st.markdown("""
-    <style>
-    .login-container {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 3rem;
-        border-radius: 20px;
-        text-align: center;
-        color: white;
-        margin: 2rem auto;
-        max-width: 500px;
-    }
-    .login-title {
-        font-size: 2.5rem;
-        margin-bottom: 1rem;
-    }
-    .login-subtitle {
-        font-size: 1.2rem;
-        opacity: 0.9;
-        margin-bottom: 2rem;
-    }
-    .google-btn {
-        background: white;
-        color: #333 !important;
-        padding: 14px 28px;
-        border-radius: 8px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        font-weight: 600;
-        font-size: 16px;
-        text-decoration: none !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        transition: all 0.3s ease;
-        width: 100%;
-        max-width: 300px;
-        margin: 20px auto;
-    }
-    .google-btn:hover {
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        transform: translateY(-2px);
-    }
-    .google-icon {
-        width: 20px;
-        height: 20px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    if lang == 'pt':
-        title = "📚 Smart YouTube Booklet"
-        subtitle = "Transforme playlists do YouTube em apostilas educacionais"
-        login_text = "Faça login com sua conta Google para continuar"
-        btn_text = "Entrar com Google"
-        error_config = "⚠️ OAuth não configurado. Configure as credenciais no Google Cloud Console."
-    else:
-        title = "📚 Smart YouTube Booklet"
-        subtitle = "Transform YouTube playlists into educational booklets"
-        login_text = "Login with your Google account to continue"
-        btn_text = "Sign in with Google"
-        error_config = "⚠️ OAuth not configured. Configure credentials in Google Cloud Console."
-    
-    st.markdown(f"""
-    <div class="login-container">
-        <div class="login-title">{title}</div>
-        <div class="login-subtitle">{subtitle}</div>
-        <p>{login_text}</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        # Gerar URL de autenticação
-        auth_url = get_google_auth_url()
-        
-        if auth_url:
-            # Botão de login real com Google
-            google_logo = "https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
-            
-            st.markdown(f"""
-            <a href="{auth_url}" class="google-btn" target="_self">
-                <img src="{google_logo}" class="google-icon" alt="Google">
-                {btn_text}
-            </a>
-            """, unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            # Informação sobre privacidade
-            if lang == 'pt':
-                st.caption("🔒 Usamos apenas seu email e nome para identificação. Não acessamos nenhum outro dado da sua conta Google.")
-            else:
-                st.caption("🔒 We only use your email and name for identification. We don't access any other data from your Google account.")
-        
-        else:
-            # OAuth não configurado - mostrar erro ou modo demo para desenvolvimento
-            st.error(error_config)
-            
-            st.markdown("---")
-            
-            # Modo demo para desenvolvimento local
-            if lang == 'pt':
-                st.markdown("**🔧 Modo Desenvolvimento (apenas local):**")
-            else:
-                st.markdown("**🔧 Development Mode (local only):**")
-            
-            demo_email = st.text_input("Email:", key="demo_email", placeholder="seu@email.com")
-            demo_name = st.text_input("Nome:", key="demo_name", placeholder="Seu Nome")
-            
-            if st.button("🔐 Entrar (Demo)", type="primary", use_container_width=True):
-                if demo_email and demo_name:
-                    st.session_state.user_email = demo_email
-                    st.session_state.user_name = demo_name
-                    st.session_state.user_logged_in = True
-                    st.rerun()
-                else:
-                    st.error("Por favor, preencha email e nome." if lang == 'pt' else "Please fill in email and name.")
-
-def logout_user():
-    """Faz logout do usuário"""
-    keys_to_clear = ['user_email', 'user_name', 'user_picture', 'user_logged_in', 
-                     'oauth_credentials', 'oauth_state']
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
 
 # Inicializar session_state
 if 'selected_model' not in st.session_state:
@@ -2346,8 +2095,8 @@ def main():
     
     # PASSO 2: Verificar login obrigatório
     if not st.session_state.get('user_logged_in', False) and not st.session_state.get('dev_mode', False):
-        show_login_screen()
-        return
+        if not require_auth():
+            return
     
     # Menu lateral
     with st.sidebar:
@@ -2427,7 +2176,7 @@ def main():
         # Botão de logout
         if st.session_state.get('user_logged_in', False):
             if st.button("🚪 Logout", use_container_width=True):
-                logout_user()
+                auth_logout()
                 st.rerun()
         
         st.markdown("---")
