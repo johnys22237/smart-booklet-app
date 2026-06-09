@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 
 
 def _get_streamlit_provider_name() -> str | None:
@@ -11,11 +12,30 @@ def _get_streamlit_provider_name() -> str | None:
 
 def _start_streamlit_login() -> None:
     """Dispara login OIDC do Streamlit com provider nomeado quando disponível."""
+    st.session_state.oidc_login_started_at = time.time()
     provider = _get_streamlit_provider_name()
     if provider:
         st.login(provider)
         return
     st.login()
+
+
+def _sanitize_stale_callback_query_params() -> None:
+    """Limpa parâmetros residuais de callback que podem reativar loop de autenticação."""
+    try:
+        has_oauth_params = any(k in st.query_params for k in ["code", "state", "provider", "error"])
+        if not has_oauth_params:
+            return
+
+        # Se não houve tentativa de login recente, tratamos como callback stale.
+        started_at = st.session_state.get("oidc_login_started_at", 0)
+        recent_login_attempt = (time.time() - float(started_at)) < 30
+
+        if not recent_login_attempt:
+            st.query_params.clear()
+            st.rerun()
+    except Exception:
+        pass
 
 
 def _sync_user_from_streamlit() -> bool:
@@ -48,6 +68,8 @@ def _sync_user_from_streamlit() -> bool:
 
 def render_streamlit_oidc_login() -> bool:
     """Renderiza login usando OIDC nativo do Streamlit."""
+    _sanitize_stale_callback_query_params()
+
     if _sync_user_from_streamlit():
         return True
 
@@ -91,7 +113,9 @@ def render_streamlit_oidc_login() -> bool:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.button(btn_text, type="primary", use_container_width=True, on_click=_start_streamlit_login)
+        if st.button(btn_text, type="primary", use_container_width=True):
+            _start_streamlit_login()
+            st.stop()
 
     return False
 
