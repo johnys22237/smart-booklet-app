@@ -1,6 +1,23 @@
 import streamlit as st
 
 
+def _get_streamlit_provider_name() -> str | None:
+    """Retorna provider nomeado se estiver configurado em [auth.<provider>]."""
+    auth_cfg = st.secrets.get("auth", {})
+    if isinstance(auth_cfg, dict) and isinstance(auth_cfg.get("google"), dict):
+        return "google"
+    return None
+
+
+def _start_streamlit_login() -> None:
+    """Dispara login OIDC do Streamlit com provider nomeado quando disponível."""
+    provider = _get_streamlit_provider_name()
+    if provider:
+        st.login(provider)
+        return
+    st.login()
+
+
 def _sync_user_from_streamlit() -> bool:
     """Sincroniza informações de usuário do st.user para session_state."""
     user = getattr(st, "user", None)
@@ -18,6 +35,14 @@ def _sync_user_from_streamlit() -> bool:
     st.session_state.user_email = email or st.session_state.get("user_email") or ""
     st.session_state.user_name = name or email or st.session_state.get("user_name") or "Usuário"
     st.session_state.user_picture = picture or st.session_state.get("user_picture") or ""
+
+    # Evita replay de callback OAuth na Cloud quando a URL fica com params antigos.
+    try:
+        if any(k in st.query_params for k in ["code", "state", "provider"]):
+            st.query_params.clear()
+    except Exception:
+        pass
+
     return True
 
 
@@ -66,7 +91,7 @@ def render_streamlit_oidc_login() -> bool:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.button(btn_text, type="primary", use_container_width=True, on_click=st.login)
+        st.button(btn_text, type="primary", use_container_width=True, on_click=_start_streamlit_login)
 
     return False
 
