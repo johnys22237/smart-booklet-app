@@ -33,6 +33,7 @@ def _sanitize_stale_callback_query_params() -> None:
         recent_login_attempt = (time.time() - float(started_at)) < 30
 
         if not recent_login_attempt:
+            st.session_state.show_manual_auth_fallback_form = True
             st.query_params.clear()
             st.rerun()
     except Exception:
@@ -132,13 +133,18 @@ def render_streamlit_oidc_login() -> bool:
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        if st.button(btn_text, type="primary", use_container_width=True):
-            _start_streamlit_login()
-            st.stop()
+        b1, b2 = st.columns(2)
+
+        with b1:
+            if st.button(btn_text, type="primary", use_container_width=True):
+                _start_streamlit_login()
+                st.stop()
+
+        with b2:
+            if st.button(loop_btn_text, use_container_width=True):
+                st.session_state.show_manual_auth_fallback_form = True
 
         st.caption(loop_help)
-        if st.button(loop_btn_text, use_container_width=True):
-            st.session_state.show_manual_auth_fallback_form = True
 
         if st.session_state.get("show_manual_auth_fallback_form", False):
             with st.expander(fallback_title, expanded=True):
